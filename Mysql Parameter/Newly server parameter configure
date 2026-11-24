@@ -1,0 +1,160 @@
+Explanation of Your MySQL Config
+Connection & Files
+Parameter	Meaning
+socket	Unix socket file used for local client connections
+log-error	Error log location (startup issues, crashes, warnings)
+pid-file	Stores the mysqld process ID
+server_id=7	Unique ID of this server. Mandatory for replication and binlog; must be different on every server in a replication topology
+Read/Write Mode
+Parameter	Meaning
+read_only=off	Normal users with write privileges can write
+super_read_only=off	Even SUPER users can write. Set both to ON on replicas to prevent accidental writes
+Binary Logging
+Parameter	Meaning
+log-bin = mysql-bin	Enables binary logs (used for replication and point-in-time recovery)
+log-bin-index	Index file listing all binlog files
+binlog_format = ROW	Logs actual row changes. Safest for replication, though larger in size
+##expire_logs_days = 7	Commented out, so binlogs never auto-delete and disk can fill up. In MySQL 8 use binlog_expire_logs_seconds instead
+Memory / Packet
+Parameter	Meaning
+tmp_table_size = 2048M	Max size of in-memory temp tables before spilling to disk. Per connection, so 2GB is very risky with many connections
+max_allowed_packet = 1024M	Max size of a single query/packet (large BLOBs, bulk inserts). 1GB is the maximum
+bulk_insert_buffer_size = 1G	Cache for bulk inserts into MyISAM. Mostly irrelevant for InnoDB; 1G is excessive
+SQL Mode
+
+sql_mode="STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION"
+
+STRICT_TRANS_TABLES: errors on invalid data instead of silently truncating
+NO_ZERO_IN_DATE / NO_ZERO_DATE: rejects dates like 2024-00-10 or 0000-00-00
+ERROR_FOR_DIVISION_BY_ZERO: error on divide by zero
+NO_ENGINE_SUBSTITUTION: error if the requested storage engine is unavailable
+
+(The other # lines are old commented alternatives.)
+
+Slow Query Log
+Parameter	Meaning
+slow_query_log=1	Enable slow query logging
+slow_query_log_file	Where it is written
+long_query_time = 5	Queries taking more than 5 seconds are logged. Consider 1–2 sec for tuning
+Authentication
+Parameter	Meaning
+mysql_native_password=ON	Enables the legacy auth plugin (disabled by default in MySQL 8.4+, removed in 9.x). Needed for older clients
+Connections
+Parameter	Meaning
+max_connections = 1000	Max simultaneous client connections
+InnoDB
+Parameter	Meaning
+innodb_buffer_pool_size = 24G	Memory cache for data and indexes. The most important setting; typically 50–70% of RAM on a dedicated DB server
+innodb_open_files = 400	Max .ibd files InnoDB keeps open at once. Low if you have many tables
+innodb_io_capacity = 400	IOPS InnoDB assumes for background tasks (flushing). Set according to disk type (HDD ~200, SSD 2000+, NVMe higher)
+innodb_flush_method = O_DIRECT	Bypasses OS cache to avoid double buffering. Recommended on Linux
+innodb_read_io_threads / write_io_threads = 8	Threads for background read and write I/O
+innodb_log_file_size = 2G	Size of each redo log file. Larger gives better write performance but longer crash recovery (deprecated in 8.0.30+ in favor of innodb_redo_log_capacity)
+Parameters to Add for a Newly Created MySQL Server
+
+Here is a solid baseline my.cnf (adjust values to your RAM/disk):
+
+ini
+[mysqld]
+# --- Basic ---
+datadir                 = /var/lib/mysql
+socket                  = /var/lib/mysql/mysql.sock
+port                    = 3306
+bind-address            = 0.0.0.0        # or specific IP
+user                    = mysql
+skip-name-resolve                         # faster connections, use IPs in grants
+character-set-server    = utf8mb4
+collation-server        = utf8mb4_unicode_ci
+default-time-zone       = '+05:30'        # or '+00:00' (UTC recommended)
+lower_case_table_names  = 1               # only set at initialization time!
+
+# --- Logging ---
+log-error               = /var/log/mysqld.log
+slow_query_log          = 1
+slow_query_log_file     = /var/lib/mysql/mysql-slow.log
+long_query_time         = 2
+log_queries_not_using_indexes = 0         # enable temporarily when tuning
+log_error_verbosity     = 3
+
+# --- Binary log / replication ---
+server_id               = 1               # unique per server
+log-bin                 = mysql-bin
+binlog_format           = ROW
+binlog_expire_logs_seconds = 604800       # 7 days (MySQL 8)
+sync_binlog             = 1               # durability
+max_binlog_size         = 512M
+gtid_mode               = ON              # recommended for replication
+enforce_gtid_consistency = ON
+log_replica_updates     = ON              # (log_slave_updates in 5.7)
+# On replicas:
+# read_only = ON
+# super_read_only = ON
+# relay_log_recovery = ON
+
+# --- Connections ---
+max_connections         = 500
+max_connect_errors      = 100000
+wait_timeout            = 600
+interactive_timeout     = 600
+thread_cache_size       = 100
+back_log                = 512
+
+# --- Per-session buffers (keep small!) ---
+sort_buffer_size        = 2M
+join_buffer_size        = 2M
+read_buffer_size        = 1M
+read_rnd_buffer_size    = 2M
+tmp_table_size          = 128M
+max_heap_table_size     = 128M            # keep equal to tmp_table_size
+max_allowed_packet      = 256M
+
+# --- Table caches ---
+table_open_cache        = 4000
+table_definition_cache  = 2000
+open_files_limit        = 65535
+
+# --- InnoDB ---
+default_storage_engine          = InnoDB
+innodb_buffer_pool_size         = 24G     # ~60-70% of RAM
+innodb_buffer_pool_instances    = 8       # 1 per GB, max 8-16
+innodb_log_file_size            = 2G      # or innodb_redo_log_capacity=4G (8.0.30+)
+innodb_log_buffer_size          = 64M
+innodb_flush_log_at_trx_commit  = 1       # full ACID; 2 = faster, small risk
+innodb_flush_method             = O_DIRECT
+innodb_file_per_table           = 1
+innodb_io_capacity              = 2000    # SSD
+innodb_io_capacity_max          = 4000
+innodb_read_io_threads          = 8
+innodb_write_io_threads         = 8
+innodb_open_files               = 4000
+innodb_lock_wait_timeout        = 50
+innodb_buffer_pool_dump_at_shutdown = 1
+innodb_buffer_pool_load_at_startup  = 1
+
+# --- Security / SQL mode ---
+sql_mode = STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION
+local_infile              = 0
+# default_authentication_plugin = caching_sha2_password (default in 8.0)
+
+# --- Optional monitoring ---
+performance_schema      = ON
+
+[client]
+socket                  = /var/lib/mysql/mysql.sock
+default-character-set   = utf8mb4
+Recommended Fixes for Your Current Config
+Enable binlog expiry: add binlog_expire_logs_seconds = 604800, otherwise disk fills.
+Reduce tmp_table_size (2G is dangerous) to 64–256M, and set max_heap_table_size the same.
+Reduce bulk_insert_buffer_size to default (8M) unless using MyISAM.
+Raise innodb_open_files and add table_open_cache if you have many tables.
+Raise innodb_io_capacity if you’re on SSD/NVMe.
+Add sync_binlog=1 and innodb_flush_log_at_trx_commit=1 for crash safety.
+Add skip-name-resolve, utf8mb4 charset, innodb_file_per_table.
+Set read_only/super_read_only = ON if this server is a replica.
+Make sure max_connections=1000 is realistic: per-connection buffers × 1000 can exhaust RAM.
+
+Notes
+
+Some parameters (lower_case_table_names, innodb_log_file_size in older versions) must be set before initializing the data directory.
+Restart MySQL after editing, and verify with SHOW VARIABLES LIKE 'param_name';.
+Tell me your MySQL version, RAM, and disk type, and I can tune exact values for your server.
